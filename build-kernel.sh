@@ -57,94 +57,23 @@ DEFCONFIG_OPTIONS=(
 CUSTOM_INDEX=$(( ${#DEFCONFIG_OPTIONS[@]} + 1 ))
 
 # -----------------------------------------------------------------------------
-# Custom defconfig writer
+# Custom defconfig: file is already in arch/arm64/configs, just ask its name
 # -----------------------------------------------------------------------------
-find_editor() {
-  local e
-  for e in "${VISUAL:-}" "${EDITOR:-}" nano vim vi; do
-    [ -n "$e" ] || continue
-    if command -v "${e%% *}" >/dev/null 2>&1; then
-      printf '%s' "$e"
-      return 0
+ask_custom_defconfig() {
+  local name tries
+  for tries in 1 2 3; do
+    ask "Custom defconfig name (file in $CFG_DIR): " ""
+    name="$(basename -- "$REPLY")"
+    [ -n "$name" ] || die "No defconfig name given."
+
+    if [ -f "$CFG_DIR/$name" ]; then
+      DEFCONFIG="$name"; info "Using $CFG_DIR/$DEFCONFIG"; return 0
+    elif [ -f "$CFG_DIR/${name}_defconfig" ]; then
+      DEFCONFIG="${name}_defconfig"; info "Using $CFG_DIR/$DEFCONFIG"; return 0
     fi
+    warn "Not found: $CFG_DIR/$name"
   done
-  return 1
-}
-
-write_custom_defconfig() {
-  local name target method base i tmp editor
-
-  ask "Custom defconfig name [camellian_custom_defconfig]: " camellian_custom_defconfig
-  name="$(basename -- "$REPLY")"
-  case "$name" in
-    *_defconfig) ;;
-    *) name="${name}_defconfig" ;;      # kbuild only accepts *_defconfig
-  esac
-  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid defconfig name: $name"
-  target="$CFG_DIR/$name"
-
-  if [ -f "$target" ]; then
-    warn "$target already exists."
-    ask "  [u]se as is / [r]ewrite (backup is kept) / [a]bort  [u]: " u
-    case "$REPLY" in
-      r|R) cp -a "$target" "$target.bak-$(date +%Y%m%d-%H%M%S)" ;;
-      a|A) die "Aborted." ;;
-      *)   DEFCONFIG="$name"; info "Using existing $target"; return 0 ;;
-    esac
-  fi
-
-  {
-    echo "How do you want to write it?"
-    echo "  1) Open in a text editor (can start from an existing defconfig)"
-    echo "  2) Paste / type it here (finish with Ctrl+D on a new line)"
-  } >&2
-  ask "Method [1]: " 1
-  method="$REPLY"
-
-  tmp="$(mktemp)"
-
-  editor=""
-  if [ "$method" != "2" ]; then
-    if ! editor="$(find_editor)"; then
-      warn "No text editor found (nano/vim/vi) - switching to paste mode."
-      method=2
-    fi
-  fi
-
-  if [ "$method" = "2" ]; then
-    echo "Paste your defconfig now, then press Ctrl+D:" >&2
-    cat > "$tmp"
-  else
-    {
-      echo "Start from:"
-      echo "  0) empty file"
-      for i in "${!DEFCONFIG_OPTIONS[@]}"; do
-        printf '  %d) copy of %s\n' $((i + 1)) "${DEFCONFIG_OPTIONS[$i]}"
-      done
-    } >&2
-    ask "Base [0]: " 0
-    base="$REPLY"
-    if [[ "$base" =~ ^[0-9]+$ ]] && [ "$((10#$base))" -ge 1 ] && [ "$((10#$base))" -le "${#DEFCONFIG_OPTIONS[@]}" ] \
-       && [ -f "$CFG_DIR/${DEFCONFIG_OPTIONS[$((10#$base - 1))]}" ]; then
-      cp "$CFG_DIR/${DEFCONFIG_OPTIONS[$((10#$base - 1))]}" "$tmp"
-    else
-      printf '# Custom defconfig: %s\n' "$name" > "$tmp"
-    fi
-    # shellcheck disable=SC2086
-    $editor "$tmp"
-  fi
-
-  sed -i 's/\r$//' "$tmp"     # strip Windows line endings from pasted text
-
-  if ! grep -Eq '^(CONFIG_[A-Za-z0-9_]+=|# CONFIG_[A-Za-z0-9_]+ is not set)' "$tmp"; then
-    rm -f "$tmp"
-    die "No CONFIG_xxx lines found - nothing written."
-  fi
-
-  install -m 0644 "$tmp" "$target"
-  rm -f "$tmp"
-  DEFCONFIG="$name"
-  info "Custom defconfig written: $target ($(wc -l < "$target") lines)"
+  die "Custom defconfig not found in $CFG_DIR."
 }
 
 # -----------------------------------------------------------------------------
@@ -161,7 +90,7 @@ choose_defconfig() {
         printf '  %d) %s\n' $((i + 1)) "${DEFCONFIG_OPTIONS[$i]}"
       fi
     done
-    printf '  %d) Custom defconfig (write your own)\n' "$CUSTOM_INDEX"
+    printf '  %d) Custom defconfig (already in %s, just enter its name)\n' "$CUSTOM_INDEX" "$CFG_DIR"
   } >&2
 
   while true; do
@@ -177,7 +106,7 @@ choose_defconfig() {
   done
 
   if [ "$choice" -eq "$CUSTOM_INDEX" ]; then
-    write_custom_defconfig
+    ask_custom_defconfig
   else
     DEFCONFIG="${DEFCONFIG_OPTIONS[$((choice - 1))]}"
   fi
